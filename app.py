@@ -2,56 +2,58 @@ from flask import Flask, request, jsonify
 import requests
 
 app = Flask(__name__)
+ 
+# Настройки API Hugging Face
+API_URL = "https://api-inference.huggingface.co/models/gpt2"
+API_TOKEN = "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"
+headers = {"Authorization": f"Bearer {API_TOKEN}"}
 
-def get_answer_from_model(question):
-    # Замените YOUR_API_KEY на ваш реальный API-ключ
-    api_key = "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"
-    
-    # URL API языковой модели
-    url = "deepseek/deepseek-r1-distill-qwen-1.5b"
+def generate_response(query):
+    """
+    Генерация ответа через API Hugging Face.
+    """
+    options = [line.split(". ")[1] for line in query.split("\n") if line.strip().isdigit()]
+    prompt = f"Ответь на вопрос: {query}. Выбери правильный вариант из предложенных."
 
-    # Параметры запроса
-    payload = {
-        "prompt": question,
-        "max_tokens": 50,  # Максимальное количество токенов в ответе
-        "temperature": 0.7  # Температура генерации текста
-    }
+    response = requests.post(API_URL, headers=headers, json={"inputs": prompt})
+    if response.status_code == 200:
+        raw_response = response.json()[0]['generated_text']
+        reasoning = raw_response.split("Ответ:")[0].strip()
+        answer = extract_answer(raw_response, options)
+        return {
+            "answer": answer,
+            "reasoning": reasoning,
+            "sources": []
+        }
+    else:
+        raise Exception(f"Ошибка при обращении к API: {response.status_code}, {response.text}")
 
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
-    }
-
-    try:
-        response = requests.post(url, json=payload, headers=headers)
-        response.raise_for_status()  # Проверка на ошибки в ответе
-        answer = response.json().get('text', "No answer received")
-        return answer
-    except requests.exceptions.RequestException as e:
-        print(f"Error: {e}")
-        return "Error occurred while fetching the answer from the model."
+def extract_answer(response, options):
+    """
+    Извлечение номера правильного ответа.
+    """
+    for i, option in enumerate(options, start=1):
+        if option.lower() in response.lower():
+            return i
+    return None
 
 @app.route('/api/request', methods=['POST'])
 def handle_request():
     data = request.json
-    question = data.get('query')
-    id = data.get('id')
+    query = data.get("query", "")
+    request_id = data.get("id", 0)
 
-    if not question or not id:
-        return jsonify({"error": "Invalid request"}), 400
-
-    answer = get_answer_from_model(question)
-    reasoning = "Reasoning based on the language model."
-    sources = ["https://itmo.ru/ru/news/", "https://itmo.ru/ru/news/"]
-
-    response = {
-        "id": id,
-        "answer": answer,
-        "reasoning": reasoning,
-        "sources": sources
-    }
-
-    return jsonify(response)
+    try:
+        result = generate_response(query)
+        result["id"] = request_id
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({
+            "id": request_id,
+            "answer": None,
+            "reasoning": str(e),
+            "sources": []
+        }), 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
